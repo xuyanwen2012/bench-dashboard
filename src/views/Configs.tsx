@@ -41,8 +41,11 @@ const COLS: Col[] = [
 type Sort = { key: string; dir: 1 | -1 } | null;
 
 export default function Configs() {
-  const { filters } = useFilters();
+  const { filters, meta } = useFilters();
   const [sort, setSort] = useState<Sort>(null);
+  // grouped mode answers "why several rows with the same settings": one block
+  // per settings combo, its commits listed beneath in first-seen order
+  const [grouped, setGrouped] = useState(true);
   const { data, error, loading } = useFetch<ConfigStat[]>(`/api/configs${filterQs(filters)}`);
 
   if (error) return <p className="text-danger">{error}</p>;
@@ -53,7 +56,7 @@ export default function Configs() {
     setSort((s) => (s?.key !== key ? { key, dir: 1 } : s.dir === 1 ? { key, dir: -1 } : null));
 
   const rows = [...(data ?? [])];
-  if (sort) {
+  if (!grouped && sort) {
     const col = COLS.find((c) => c.key === sort.key);
     if (col)
       rows.sort((a, b) => {
@@ -70,90 +73,168 @@ export default function Configs() {
       });
   }
 
+  const totalRuns = rows.reduce((a, r) => a + r.n, 0);
+  const flagged = rows.filter((r) => (r.quality?.length ?? 0) > 0).length;
+
+  const commitIdx = new Map((meta?.e2e.commits ?? []).map((c, i) => [c, i]));
+  const groups = new Map<string, ConfigStat[]>();
+  if (grouped) {
+    for (const r of rows) {
+      const key = `${r.device}|${r.driver_ver}|${r.model ?? ""}|${r.branch}`;
+      const g = groups.get(key);
+      if (g) g.push(r);
+      else groups.set(key, [r]);
+    }
+    for (const g of groups.values())
+      g.sort((a, b) => (commitIdx.get(a.commit_hash) ?? 0) - (commitIdx.get(b.commit_hash) ?? 0));
+  }
+  const groupList = [...groups.values()].sort((a, b) => {
+    const A = a[0];
+    const B = b[0];
+    return (
+      A.device.localeCompare(B.device) ||
+      modelSize(A.model ?? "") - modelSize(B.model ?? "") ||
+      A.driver_ver.localeCompare(B.driver_ver) ||
+      A.branch.localeCompare(B.branch)
+    );
+  });
+
+  const SETTINGS_COLS = ["model", "device", "driver"];
+  const visibleCols = grouped ? COLS.filter((c) => !SETTINGS_COLS.includes(c.key)) : COLS;
+
+  const row = (r: ConfigStat, inGroup: boolean) => (
+    <tr
+      key={r.config_hash}
+      onClick={() => (location.hash = `#/config/${r.config_hash}${filterQs(filters)}`)}
+      className="border-b border-edge-soft hover:bg-raised cursor-pointer"
+    >
+      <td className="px-2 py-0.5 font-mono text-ink">{shortHash(r.commit_hash)}</td>
+      <td className="px-2 py-0.5 font-mono text-ink3">{r.config_hash}</td>
+      {/* settings columns exist only flat; grouped, they live in the header row */}
+      {!inGroup && (
+        <>
+          <td className="px-2 py-0.5 text-ink" title={r.model ?? undefined}>
+            {r.model ? modelLabel(r.model) : "—"}
+          </td>
+          <td className="px-2 py-0.5 text-ink2">{r.device}</td>
+          <td className="px-2 py-0.5 font-mono text-ink3">{r.driver_ver}</td>
+        </>
+      )}
+      <td className="px-2 py-0.5 text-right tabular-nums text-ink2">{r.n}</td>
+      <td className="px-2 py-0.5 text-right tabular-nums font-medium text-ink">
+        {fmt(r.mean_tps)}
+      </td>
+      <td className="px-2 py-0.5 text-right tabular-nums text-ink3">{fmt(r.sd_tps)}</td>
+      <td className="px-2 py-0.5 text-right tabular-nums text-ink2">{fmt(r.cov_pct, 1)}</td>
+      <td className="px-2 py-0.5 text-right tabular-nums font-medium text-ink">
+        {fmt(r.prefill_mean, 1)}
+      </td>
+      <td className="px-2 py-0.5 text-right tabular-nums text-ink3">{fmt(r.prefill_sd, 1)}</td>
+      <td className="px-2 py-0.5">
+        {r.n < N_MIN && (
+          <span className="mr-1 px-1 rounded text-[11px] text-ink2 border border-edge">
+            <span style={{ color: STATUS.warning }}>▲</span> n&lt;{N_MIN}
+          </span>
+        )}
+        {r.cov_pct != null && r.cov_pct > COV_MAX && (
+          <span className="px-1 rounded text-[11px] text-ink2 border border-edge">
+            <span style={{ color: STATUS.serious }}>◆</span> CoV&gt;{COV_MAX}%
+          </span>
+        )}
+        {(r.quality?.length ?? 0) > 0 && (
+          <span
+            className="ml-1 px-1 rounded text-[11px] text-ink2 border border-edge"
+            title={r.quality.join(" · ")}
+          >
+            <span
+              style={{
+                color: r.quality.some((q) => q.startsWith("reps"))
+                  ? STATUS.serious
+                  : STATUS.warning,
+              }}
+            >
+              ⚠
+            </span>{" "}
+            {r.quality[0]}
+            {r.quality.length > 1 ? ` +${r.quality.length - 1}` : ""}
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2 text-[12px]">
-        <span className="text-ink3">click a column to sort · asc → desc → default</span>
-        <span className="ml-auto text-ink3">{rows.length} configs</span>
+      <div className="flex items-center gap-3 mb-2 text-[12px]">
+        <label className="flex items-center gap-1 text-ink2">
+          <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />
+          group by settings
+        </label>
+        <span className="text-ink3">
+          {grouped
+            ? "one block per settings combo · commits in first-seen order"
+            : "click a column to sort · asc → desc → default"}
+        </span>
+        <span className="ml-auto text-ink3 tabular-nums">
+          {rows.length} configs · {totalRuns} runs ·{" "}
+          {flagged > 0 ? (
+            <>
+              <span style={{ color: STATUS.warning }}>⚠</span> {flagged} flagged
+            </>
+          ) : (
+            "0 flagged"
+          )}
+        </span>
       </div>
       <table className="w-full border-collapse">
         <thead>
           <tr className="text-left text-[11px] uppercase tracking-wide text-ink3 border-b border-edge">
-            {COLS.map((c) => (
+            {visibleCols.map((c) => (
               <th
                 key={c.key}
-                onClick={() => clickCol(c.key)}
+                onClick={grouped ? undefined : () => clickCol(c.key)}
                 aria-sort={
-                  sort?.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : "none"
+                  !grouped && sort?.key === c.key
+                    ? sort.dir === 1
+                      ? "ascending"
+                      : "descending"
+                    : "none"
                 }
-                className={`px-2 py-1 cursor-pointer select-none hover:text-ink ${
-                  c.right ? "text-right" : ""
-                } ${sort?.key === c.key ? "text-ink" : ""}`}
+                className={`px-2 py-1 select-none ${
+                  grouped ? "" : "cursor-pointer hover:text-ink"
+                } ${c.right ? "text-right" : ""} ${
+                  !grouped && sort?.key === c.key ? "text-ink" : ""
+                }`}
               >
                 {c.label}
-                {sort?.key === c.key ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+                {!grouped && sort?.key === c.key ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr
-              key={r.config_hash}
-              onClick={() => (location.hash = `#/config/${r.config_hash}${filterQs(filters)}`)}
-              className="border-b border-edge-soft hover:bg-raised cursor-pointer"
-            >
-              <td className="px-2 py-0.5 font-mono text-ink">{shortHash(r.commit_hash)}</td>
-              <td className="px-2 py-0.5 font-mono text-ink3">{r.config_hash}</td>
-              <td className="px-2 py-0.5 text-ink" title={r.model ?? undefined}>
-                {r.model ? modelLabel(r.model) : "—"}
-              </td>
-              <td className="px-2 py-0.5 text-ink2">{r.device}</td>
-              <td className="px-2 py-0.5 font-mono text-ink3">{r.driver_ver}</td>
-              <td className="px-2 py-0.5 text-right tabular-nums text-ink2">{r.n}</td>
-              <td className="px-2 py-0.5 text-right tabular-nums font-medium text-ink">
-                {fmt(r.mean_tps)}
-              </td>
-              <td className="px-2 py-0.5 text-right tabular-nums text-ink3">{fmt(r.sd_tps)}</td>
-              <td className="px-2 py-0.5 text-right tabular-nums text-ink2">{fmt(r.cov_pct, 1)}</td>
-              <td className="px-2 py-0.5 text-right tabular-nums font-medium text-ink">
-                {fmt(r.prefill_mean, 1)}
-              </td>
-              <td className="px-2 py-0.5 text-right tabular-nums text-ink3">
-                {fmt(r.prefill_sd, 1)}
-              </td>
-              <td className="px-2 py-0.5">
-                {r.n < N_MIN && (
-                  <span className="mr-1 px-1 rounded text-[11px] text-ink2 border border-edge">
-                    <span style={{ color: STATUS.warning }}>▲</span> n&lt;{N_MIN}
-                  </span>
-                )}
-                {r.cov_pct != null && r.cov_pct > COV_MAX && (
-                  <span className="px-1 rounded text-[11px] text-ink2 border border-edge">
-                    <span style={{ color: STATUS.serious }}>◆</span> CoV&gt;{COV_MAX}%
-                  </span>
-                )}
-                {(r.quality?.length ?? 0) > 0 && (
-                  <span
-                    className="ml-1 px-1 rounded text-[11px] text-ink2 border border-edge"
-                    title={r.quality.join(" · ")}
-                  >
-                    <span
-                      style={{
-                        color: r.quality.some((q) => q.startsWith("reps"))
-                          ? STATUS.serious
-                          : STATUS.warning,
-                      }}
+          {grouped
+            ? groupList.flatMap((g) => {
+                const f = g[0];
+                return [
+                  <tr key={`h:${f.config_hash}`} className="border-b border-edge-soft">
+                    <td
+                      colSpan={visibleCols.length}
+                      className="px-2 pt-3 pb-1 text-[11px] uppercase tracking-wide text-ink2"
                     >
-                      ⚠
-                    </span>{" "}
-                    {r.quality[0]}
-                    {r.quality.length > 1 ? ` +${r.quality.length - 1}` : ""}
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
+                      {f.model ? modelLabel(f.model) : "—"} · {f.device} ·{" "}
+                      <span className="font-mono normal-case">{f.driver_ver}</span> ·{" "}
+                      <span className="font-mono normal-case">{f.branch}</span>
+                      <span className="text-ink3">
+                        {" "}
+                        · {g.length} commit{g.length === 1 ? "" : "s"}
+                      </span>
+                    </td>
+                  </tr>,
+                  ...g.map((r) => row(r, true)),
+                ];
+              })
+            : rows.map((r) => row(r, false))}
         </tbody>
       </table>
     </div>

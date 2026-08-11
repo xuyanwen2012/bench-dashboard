@@ -33,11 +33,15 @@ Two categories, kept fully separate — a side panel selects between them:
 
 e2e category:
 
-- **configs** — per config: model, n, decode mean/sd/CoV%, prefill mean/sd; sort by
-  CoV, decode, or prefill; flags for under-sampled (n<5), noisy (CoV>5%), and
-  measurement-quality (⚠, below); click a row for its runs, which open with an
-  aggregate summary (mean/sd/CoV of decode, prefill, e2e). Aggregated directly from
-  `runs` (not the `config_stats` view, which has no model column or prefill stats).
+- **configs** — per config: model, n, decode mean/sd/CoV%, prefill mean/sd; flags for
+  under-sampled (n<5), noisy (CoV>5%), and measurement-quality (⚠, below); click a row
+  for its runs, which open with an aggregate summary (mean/sd/CoV of decode, prefill,
+  e2e). Aggregated directly from `runs` (not the `config_stats` view, which has no
+  model column or prefill stats). Default **grouped by settings**: one block per
+  device+driver+model+branch combo, its commits beneath in first-seen order (a
+  config_hash is per commit, so "the same settings" appears once per commit —
+  grouping makes that legible); toggle off for the flat, column-sortable table. A
+  stat strip shows configs · total runs · quality-flagged count.
 - **trend** — stacked panels of mean ± sd per commit (first-seen order) for the
   selected device+branch+model: e2e, prefill, decode tok/s, each toggleable via checkbox.
   e2e = `3072 / (2048/prefill_tps + 1024/decode_tps)` (the standard 2048-prefill +
