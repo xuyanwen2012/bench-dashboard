@@ -1,5 +1,6 @@
 import type { CustomSeriesRenderItemAPI } from "echarts";
 import { useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -86,6 +87,11 @@ function writeCriteria(c: Criteria) {
 }
 
 const xLabel = (dim: Dim, v: string) => (dim === "model" ? modelLabel(v) : v);
+const cellKey = (fv: string, xv: string, sv: string) => `${fv}\x00${xv}\x00${sv}`;
+const comboVal = (
+  row: { device: string; branch: string; driver_ver: string; model: string | null },
+  d: Dim,
+) => (d === "model" ? (row.model ?? "") : row[d]);
 
 export default function Compare() {
   const { meta } = useFilters();
@@ -109,9 +115,36 @@ export default function Compare() {
     setCriteria(next);
   };
 
-  const { data, error, loading } = useFetch<CompareCell[]>(
-    `/api/compare${qs({ metric: c.metric, x: c.x, series: c.series || undefined, ...c.fixed })}`,
-  );
+  const fixedDims = DIMS.filter((d) => d !== c.x && d !== c.series);
+  // model off-axis and unfixed means faceted (one panel per model), never pooled
+  const faceted = fixedDims.includes("model") && !c.fixed.model;
+
+  // No-pooling gate for the remaining dimensions: an unfixed non-axis dimension
+  // with >1 value co-occurring with the fixed selections would silently average
+  // unrelated runs — block instead. Co-occurrence comes from the meta combos so
+  // a dimension with a single possible value (e.g. one driver per device) never
+  // blocks spuriously.
+  const blocked = useMemo(() => {
+    const combos = meta?.e2e.combos ?? [];
+    const fixedEntries = (Object.entries(c.fixed) as [Dim, string][]).filter(([, v]) => v);
+    const matching = combos.filter((row) => fixedEntries.every(([d, v]) => comboVal(row, d) === v));
+    return fixedDims
+      .filter((d) => d !== "model" && !c.fixed[d])
+      .map((d) => ({ dim: d, values: [...new Set(matching.map((row) => comboVal(row, d)))] }))
+      .filter((b) => b.values.length > 1);
+  }, [meta, c.fixed, fixedDims]);
+
+  const url =
+    meta && blocked.length === 0
+      ? `/api/compare${qs({
+          metric: c.metric,
+          x: c.x,
+          series: c.series || undefined,
+          facet: faceted ? "model" : undefined,
+          ...c.fixed,
+        })}`
+      : null;
+  const { data, error, loading } = useFetch<CompareCell[]>(url);
   const cells = data ?? [];
 
   const xs = useMemo(() => {
@@ -119,7 +152,15 @@ export default function Compare() {
     return c.x === "model" ? vals.sort((a, b) => modelSize(a) - modelSize(b)) : vals.sort();
   }, [cells, c.x]);
   const seriesVals = useMemo(() => [...new Set(cells.map((r) => r.series ?? ""))].sort(), [cells]);
-  const byKey = useMemo(() => new Map(cells.map((r) => [`${r.x}|${r.series ?? ""}`, r])), [cells]);
+  // panels: one per model with data (facetless responses collapse to one "" panel)
+  const facets = useMemo(
+    () => [...new Set(cells.map((r) => r.facet ?? ""))].sort((a, b) => modelSize(a) - modelSize(b)),
+    [cells],
+  );
+  const byKey = useMemo(
+    () => new Map(cells.map((r) => [cellKey(r.facet ?? "", r.x, r.series ?? ""), r])),
+    [cells],
+  );
 
   const metaValues = (d: Dim): string[] =>
     d === "model"
@@ -134,61 +175,119 @@ export default function Compare() {
 
   const option = useMemo(() => {
     const S = Math.max(seriesVals.length, 1);
-    const barSeries = seriesVals.map((sv, si) => ({
-      name: sv || c.metric,
-      type: "bar",
-      barCategoryGap: "30%",
-      barGap: "10%",
-      itemStyle: { color: cat[si % cat.length], borderRadius: [4, 4, 0, 0] },
-      data: xs.map((xv) => byKey.get(`${xv}|${sv}`)?.mean ?? null),
+    const F = Math.max(facets.length, 1);
+    const showTitles = facets.some(Boolean);
+    const hasLegend = seriesVals.some(Boolean);
+    // percent-based horizontal layout: each panel owns 1/F of the width, with
+    // room on its left for its own y-axis labels (every panel has its own scale)
+    const panelW = 100 / F;
+    const yPad = F > 1 ? 6.5 : 6;
+    const gap = 1.5;
+    const top = (hasLegend ? 24 : 6) + (showTitles ? 22 : 14);
+    // narrow panels auto-hide overlapping category labels; force them all and
+    // tilt when long labels must share a fraction of the width
+    const rotate = F > 1 && xs.some((v) => xLabel(c.x, v).length > 8) ? 20 : 0;
+    const grids = facets.map((_, fi) => ({
+      left: `${fi * panelW + yPad}%`,
+      width: `${panelW - yPad - gap}%`,
+      top,
+      bottom: rotate ? 44 : 30,
     }));
-    // ±sd whiskers as a custom series per bar series, positioned on the bar layout
-    const whiskers = seriesVals.map((sv, si) => ({
-      name: `${sv || c.metric} sd`,
-      type: "custom",
-      silent: true,
-      z: 10,
-      data: xs
-        .map((xv, xi) => {
-          const cell = byKey.get(`${xv}|${sv}`);
-          return cell?.sd ? [xi, cell.mean - cell.sd, cell.mean + cell.sd] : null;
-        })
-        .filter(Boolean),
-      renderItem: (_params: unknown, api: CustomSeriesRenderItemAPI) => {
-        const xi = api.value(0);
-        const lo = api.coord([xi, api.value(1)]);
-        const hi = api.coord([xi, api.value(2)]);
-        // api.size() is optional per echarts' types (not all coord systems implement it)
-        // but is always present for this cartesian bar chart; it returns a single number
-        // for a scalar input and an array for the 2-element vector input we pass here
-        const band = (api.size?.([1, 0]) as number[] | undefined)?.[0] ?? 0;
-        const usable = band * 0.7;
-        const barW = usable / (S + 0.1 * (S - 1));
-        const cx = lo[0] - usable / 2 + barW * (si + 0.5) + 0.1 * barW * si;
-        const cap = barW * 0.4;
-        const style = { stroke: t.secondary, lineWidth: 1.5, fill: null as null };
-        return {
-          type: "group",
-          children: [
-            { type: "line", shape: { x1: cx, y1: lo[1], x2: cx, y2: hi[1] }, style },
-            {
-              type: "line",
-              shape: { x1: cx - cap / 2, y1: hi[1], x2: cx + cap / 2, y2: hi[1] },
-              style,
-            },
-            {
-              type: "line",
-              shape: { x1: cx - cap / 2, y1: lo[1], x2: cx + cap / 2, y2: lo[1] },
-              style,
-            },
-          ],
-        };
+    const titles = showTitles
+      ? facets.map((fv, fi) => ({
+          text: modelLabel(fv),
+          left: `${fi * panelW + yPad + (panelW - yPad - gap) / 2}%`,
+          textAlign: "center" as const,
+          top: hasLegend ? 22 : 4,
+          textStyle: { color: t.secondary, fontSize: 11, fontWeight: "normal" as const },
+        }))
+      : [];
+    const xAxes = facets.map((_, fi) => ({
+      type: "category",
+      gridIndex: fi,
+      data: xs.map((v) => xLabel(c.x, v)),
+      axisLine: { lineStyle: { color: t.axis } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: t.muted,
+        fontFamily: c.x === "model" ? undefined : "monospace",
+        interval: 0,
+        rotate,
       },
     }));
+    const yAxes = facets.map((_, fi) => ({
+      type: "value",
+      gridIndex: fi,
+      name: fi === 0 ? `${c.metric} tok/s` : undefined,
+      nameTextStyle: { color: t.muted, align: "left" as const },
+      splitLine: { lineStyle: { color: t.grid } },
+      axisLabel: { color: t.muted },
+    }));
+    const barSeries = facets.flatMap((fv, fi) =>
+      seriesVals.map((sv, si) => ({
+        name: sv || c.metric,
+        type: "bar",
+        xAxisIndex: fi,
+        yAxisIndex: fi,
+        barCategoryGap: "30%",
+        barGap: "10%",
+        itemStyle: { color: cat[si % cat.length], borderRadius: [4, 4, 0, 0] },
+        data: xs.map((xv) => byKey.get(cellKey(fv, xv, sv))?.mean ?? null),
+      })),
+    );
+    // ±sd whiskers as a custom series per bar series, positioned on the bar layout
+    const whiskers = facets.flatMap((fv, fi) =>
+      seriesVals.map((sv, si) => ({
+        name: `${sv || c.metric} sd`,
+        type: "custom",
+        silent: true,
+        z: 10,
+        xAxisIndex: fi,
+        yAxisIndex: fi,
+        data: xs
+          .map((xv, xi) => {
+            const cell = byKey.get(cellKey(fv, xv, sv));
+            return cell?.sd ? [xi, cell.mean - cell.sd, cell.mean + cell.sd] : null;
+          })
+          .filter(Boolean),
+        renderItem: (_params: unknown, api: CustomSeriesRenderItemAPI) => {
+          const xi = api.value(0);
+          const lo = api.coord([xi, api.value(1)]);
+          const hi = api.coord([xi, api.value(2)]);
+          // api.size() is optional per echarts' types (not all coord systems implement it)
+          // but is always present for this cartesian bar chart; it returns a single number
+          // for a scalar input and an array for the 2-element vector input we pass here.
+          // coord/size resolve against this series' own grid, so the math holds per panel.
+          const band = (api.size?.([1, 0]) as number[] | undefined)?.[0] ?? 0;
+          const usable = band * 0.7;
+          const barW = usable / (S + 0.1 * (S - 1));
+          const cx = lo[0] - usable / 2 + barW * (si + 0.5) + 0.1 * barW * si;
+          const cap = barW * 0.4;
+          const style = { stroke: t.secondary, lineWidth: 1.5, fill: null as null };
+          return {
+            type: "group",
+            children: [
+              { type: "line", shape: { x1: cx, y1: lo[1], x2: cx, y2: hi[1] }, style },
+              {
+                type: "line",
+                shape: { x1: cx - cap / 2, y1: hi[1], x2: cx + cap / 2, y2: hi[1] },
+                style,
+              },
+              {
+                type: "line",
+                shape: { x1: cx - cap / 2, y1: lo[1], x2: cx + cap / 2, y2: lo[1] },
+                style,
+              },
+            ],
+          };
+        },
+      })),
+    );
     return {
       ...chartBase(t),
-      grid: { left: 60, right: 20, top: seriesVals.some(Boolean) ? 36 : 20, bottom: 30 },
-      legend: seriesVals.some(Boolean)
+      title: titles,
+      grid: grids,
+      legend: hasLegend
         ? {
             top: 4,
             data: seriesVals, // whisker series stay out of the legend
@@ -199,47 +298,40 @@ export default function Compare() {
         : { show: false },
       tooltip: {
         ...tooltipStyle(t),
-        formatter: (p: { seriesName: string; dataIndex: number }) => {
-          const cell = byKey.get(
-            `${xs[p.dataIndex]}|${seriesVals.length && p.seriesName !== c.metric ? p.seriesName : ""}`,
-          );
+        formatter: (p: { seriesIndex: number; dataIndex: number }) => {
+          // bar series are ordered facet-major, S series per facet; whiskers are
+          // silent so only bars reach the tooltip
+          const fv = facets[Math.floor(p.seriesIndex / S)] ?? "";
+          const sv = seriesVals[p.seriesIndex % S] ?? "";
+          const cell = byKey.get(cellKey(fv, xs[p.dataIndex], sv));
           if (!cell) return "";
           return (
-            `${xLabel(c.x, cell.x)}${cell.series ? ` · ${cell.series}` : ""}<br/>` +
+            `${fv ? `${modelLabel(fv)} · ` : ""}${xLabel(c.x, cell.x)}` +
+            `${cell.series ? ` · ${cell.series}` : ""}<br/>` +
             `<span style="font-family:monospace">${cell.commit_hash}</span><br/>` +
             `${c.metric} <b style="color:${t.primary}">${fmt(cell.mean)}</b> ± ${fmt(cell.sd)} tok/s · n=${cell.n}`
           );
         },
       },
-      xAxis: {
-        type: "category",
-        data: xs.map((v) => xLabel(c.x, v)),
-        axisLine: { lineStyle: { color: t.axis } },
-        axisTick: { show: false },
-        axisLabel: { color: t.muted, fontFamily: c.x === "model" ? undefined : "monospace" },
-      },
-      yAxis: {
-        type: "value",
-        name: `${c.metric} tok/s`,
-        nameTextStyle: { color: t.muted, align: "left" },
-        splitLine: { lineStyle: { color: t.grid } },
-        axisLabel: { color: t.muted },
-      },
+      xAxis: xAxes,
+      yAxis: yAxes,
       series: [...barSeries, ...whiskers],
     };
-  }, [xs, seriesVals, byKey, c.metric, c.x, t, cat]);
+  }, [xs, seriesVals, facets, byKey, c.metric, c.x, t, cat]);
 
   const DimSelect = ({
     value,
     onChange,
     options,
     allowNone,
+    noneLabel = "none",
     width = "w-36",
   }: {
     value: string;
     onChange: (v: string) => void;
     options: { value: string; label: string }[];
     allowNone?: boolean;
+    noneLabel?: string;
     width?: string;
   }) => (
     <Select
@@ -250,7 +342,7 @@ export default function Compare() {
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {allowNone && <SelectItem value={ANY}>none</SelectItem>}
+        {allowNone && <SelectItem value={ANY}>{noneLabel}</SelectItem>}
         {options.map((o) => (
           <SelectItem key={o.value} value={o.value} className="font-mono text-[12px]">
             {o.label}
@@ -259,9 +351,6 @@ export default function Compare() {
       </SelectContent>
     </Select>
   );
-
-  const fixedDims = DIMS.filter((d) => d !== c.x && d !== c.series);
-  const pooled = fixedDims.filter((d) => !c.fixed[d] && metaValues(d).length > 1);
 
   return (
     <div className="max-w-5xl space-y-3">
@@ -314,6 +403,7 @@ export default function Compare() {
               <DimSelect
                 value={c.fixed[d] ?? ""}
                 allowNone
+                noneLabel={d === "model" ? "all (faceted)" : "none"}
                 onChange={(v) => update({ ...c, fixed: { ...c.fixed, [d]: v || undefined } })}
                 options={metaValues(d).map((v) => ({
                   value: v,
@@ -322,16 +412,38 @@ export default function Compare() {
               />
             </label>
           ))}
-          {pooled.length > 0 && (
-            <span className="text-ink3">
-              ⚠ pooled across all {pooled.map((d) => DIM_LABEL[d]).join(", ")} values
-            </span>
-          )}
         </CardContent>
       </Card>
 
+      {blocked.length > 0 && (
+        <Card className="py-3 gap-2">
+          <CardContent className="px-4 space-y-2 text-[12px]">
+            {blocked.map((b) => (
+              <div key={b.dim} className="flex flex-wrap items-center gap-2">
+                <span className="text-ink2">
+                  <span className="font-medium text-ink">{DIM_LABEL[b.dim]}</span> is not fixed —
+                  this would pool {b.values.length} {DIM_LABEL[b.dim]}s into one mean. Pick one, or
+                  use {DIM_LABEL[b.dim]} as the x axis or series:
+                </span>
+                {b.values.map((v) => (
+                  <Button
+                    key={v}
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-2 font-mono text-[12px]"
+                    onClick={() => update({ ...c, fixed: { ...c.fixed, [b.dim]: v } })}
+                  >
+                    {v}
+                  </Button>
+                ))}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {error && <p className="text-danger text-[12px]">{error}</p>}
-      {!loading && cells.length === 0 && !error && (
+      {url && !loading && cells.length === 0 && !error && (
         <p className="text-ink3 text-[12px]">no runs match these criteria</p>
       )}
       {cells.length > 0 && <EChart option={option} height={360} />}
@@ -340,7 +452,8 @@ export default function Compare() {
         <Card className="py-3 gap-2">
           <CardHeader className="px-4">
             <CardTitle className="text-[12px] uppercase tracking-wide text-ink3 font-normal">
-              cells · latest commit per {c.x}
+              cells · latest commit per {faceted ? "model × " : ""}
+              {DIM_LABEL[c.x]}
               {c.series ? ` × ${DIM_LABEL[c.series]}` : ""}
             </CardTitle>
           </CardHeader>
@@ -348,6 +461,7 @@ export default function Compare() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {faceted && <TableHead className="h-7 text-[11px] uppercase">model</TableHead>}
                   <TableHead className="h-7 text-[11px] uppercase">{DIM_LABEL[c.x]}</TableHead>
                   {c.series && (
                     <TableHead className="h-7 text-[11px] uppercase">
@@ -362,33 +476,35 @@ export default function Compare() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {xs.flatMap((xv) =>
-                  seriesVals.map((sv) => {
-                    const cell = byKey.get(`${xv}|${sv}`);
-                    return (
-                      <TableRow key={`${xv}|${sv}`} className="text-[12px]">
-                        <TableCell className="py-1">{xLabel(c.x, xv)}</TableCell>
-                        {c.series && <TableCell className="py-1">{sv}</TableCell>}
-                        <TableCell className="py-1 font-mono text-ink2">
-                          {cell ? shortHash(cell.commit_hash) : "—"}
-                        </TableCell>
-                        <TableCell className="py-1 text-right tabular-nums">
-                          {cell?.n ?? "—"}
-                        </TableCell>
-                        <TableCell className="py-1 text-right tabular-nums">
-                          {cell ? fmt(cell.mean) : "—"}
-                        </TableCell>
-                        <TableCell className="py-1 text-right tabular-nums text-ink2">
-                          {cell ? fmt(cell.sd) : "—"}
-                        </TableCell>
-                        <TableCell className="py-1 text-right tabular-nums">
-                          {cell?.sd != null && cell.mean
-                            ? fmt((100 * cell.sd) / cell.mean, 1)
-                            : "—"}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  }),
+                {facets.flatMap((fv) =>
+                  xs.flatMap((xv) =>
+                    seriesVals.map((sv) => {
+                      const cell = byKey.get(cellKey(fv, xv, sv));
+                      if (!cell) return null;
+                      return (
+                        <TableRow key={cellKey(fv, xv, sv)} className="text-[12px]">
+                          {faceted && <TableCell className="py-1">{modelLabel(fv)}</TableCell>}
+                          <TableCell className="py-1">{xLabel(c.x, xv)}</TableCell>
+                          {c.series && <TableCell className="py-1">{sv}</TableCell>}
+                          <TableCell className="py-1 font-mono text-ink2">
+                            {shortHash(cell.commit_hash)}
+                          </TableCell>
+                          <TableCell className="py-1 text-right tabular-nums">{cell.n}</TableCell>
+                          <TableCell className="py-1 text-right tabular-nums">
+                            {fmt(cell.mean)}
+                          </TableCell>
+                          <TableCell className="py-1 text-right tabular-nums text-ink2">
+                            {fmt(cell.sd)}
+                          </TableCell>
+                          <TableCell className="py-1 text-right tabular-nums">
+                            {cell.sd != null && cell.mean
+                              ? fmt((100 * cell.sd) / cell.mean, 1)
+                              : "—"}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }),
+                  ),
                 )}
               </TableBody>
             </Table>

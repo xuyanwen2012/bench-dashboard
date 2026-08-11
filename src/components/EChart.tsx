@@ -2,6 +2,7 @@ import { BarChart, CustomChart, HeatmapChart, LineChart, ScatterChart } from "ec
 import {
   GridComponent,
   LegendComponent,
+  TitleComponent,
   TooltipComponent,
   VisualMapComponent,
 } from "echarts/components";
@@ -17,6 +18,7 @@ echarts.use([
   ScatterChart,
   GridComponent,
   LegendComponent,
+  TitleComponent,
   TooltipComponent,
   VisualMapComponent,
   CanvasRenderer,

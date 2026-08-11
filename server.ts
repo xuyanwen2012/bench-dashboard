@@ -59,6 +59,7 @@ const server = Bun.serve({
       const metric = url.searchParams.get("metric");
       const x = url.searchParams.get("x");
       const series = url.searchParams.get("series");
+      const facet = url.searchParams.get("facet");
       if (!metric || !METRICS[metric])
         return json({ error: `metric must be one of: ${Object.keys(METRICS).join(", ")}` }, 400);
       if (!x || !DIMENSIONS[x])
@@ -66,14 +67,18 @@ const server = Bun.serve({
       if (series && !DIMENSIONS[series])
         return json({ error: `series must be one of: ${Object.keys(DIMENSIONS).join(", ")}` }, 400);
       if (series && series === x) return json({ error: "series must differ from x" }, 400);
-      // a fixed filter on the x/series dimension would contradict the axes
+      if (facet && !DIMENSIONS[facet])
+        return json({ error: `facet must be one of: ${Object.keys(DIMENSIONS).join(", ")}` }, 400);
+      if (facet && (facet === x || facet === series))
+        return json({ error: "facet must differ from x and series" }, 400);
+      // a fixed filter on the x/series/facet dimension would contradict the axes
       const filters = filtersOf(url);
-      for (const dim of [x, series]) {
+      for (const dim of [x, series, facet]) {
         if (dim && dim !== "commit" && filters[dim as keyof typeof filters]) {
           delete filters[dim as keyof typeof filters];
         }
       }
-      return json(q.compare(metric, x, series, filters, inclExcluded(url)));
+      return json(q.compare(metric, x, series, facet, filters, inclExcluded(url)));
     },
 
     "/*": index,

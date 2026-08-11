@@ -80,6 +80,7 @@ export type Meta = {
 };
 
 export type CompareCell = {
+  facet: string | null;
   x: string;
   series: string | null;
   commit_hash: string;

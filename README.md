@@ -37,10 +37,10 @@ e2e category:
   under-sampled (n<5), noisy (CoV>5%), and measurement-quality (⚠, below); click a row
   for its runs, which open with an aggregate summary (mean/sd/CoV of decode, prefill,
   e2e). Aggregated directly from `runs` (not the `config_stats` view, which has no
-  model column or prefill stats). Default **grouped by settings**: one block per
-  device+driver+model+branch combo, its commits beneath in first-seen order (a
-  config_hash is per commit, so "the same settings" appears once per commit —
-  grouping makes that legible); toggle off for the flat, column-sortable table. A
+  model column or prefill stats). Default is the flat, column-sortable table; a
+  **group by settings** toggle switches to one block per device+driver+model+branch
+  combo, its commits beneath in first-seen order (a config_hash is per commit, so
+  "the same settings" appears once per commit — grouping makes that legible). A
   stat strip shows configs · total runs · quality-flagged count.
 - **trend** — stacked panels of mean ± sd per commit (first-seen order) for the
   selected device+branch+model: e2e, prefill, decode tok/s, each toggleable via checkbox.
@@ -54,8 +54,16 @@ e2e category:
 - **compare** — pick a metric (decode/prefill/e2e), an x-axis dimension and an optional
   series dimension (model / branch / device / driver), fix the rest; grouped bars with
   sd whiskers plus a numbers table. Each cell aggregates only the **latest commit** in
-  its group (hash shown in the table/tooltip). Criteria live in the URL, so comparisons
-  are bookmarkable. `GET /api/compare?metric=&x=&series=&<fixed dims>` backs it.
+  its group (hash shown in the table/tooltip). The view **never pools across a
+  dimension**: models are three different tests, so when model is off-axis and unfixed
+  ("all (faceted)") the chart renders one panel per model — own y-scale, shared
+  x/series and legend — and the table gains a model column (`facet=model` on the API,
+  latest commit chosen per model). Any *other* unfixed non-axis dimension with more
+  than one value co-occurring with the fixed picks blocks the chart with one-click
+  value buttons instead of silently averaging (a dimension with a single co-occurring
+  value — e.g. one driver on the fixed device — never blocks). Criteria live in the
+  URL, so comparisons are bookmarkable.
+  `GET /api/compare?metric=&x=&series=&facet=&<fixed dims>` backs it.
 
 tile-sweep category:
 
