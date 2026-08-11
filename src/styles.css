@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+/* Semantic tokens (dataviz reference palette). Keep in sync with src/theme.ts. */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --raised: #f0efec;
+  --ink: #0b0b0b;
+  --ink2: #52514e;
+  --ink3: #898781;
+  --edge: #d9d8d0;
+  --edge-soft: #e9e8e2;
+  --danger: #c23434;
+  --series: #2a78d6; /* chart series blue; in UI chrome only as the instrument accent */
+}
+
+.dark {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --raised: #262624;
+  --ink: #ffffff;
+  --ink2: #c3c2b7;
+  --ink3: #898781;
+  --edge: #383835;
+  --edge-soft: #262624;
+  --danger: #e66767;
+  --series: #3987e5;
+}
+
+/* shadcn/ui variables — PAIRED with the token blocks above: every value below is
+   drawn from the same palette hexes so the one .dark flip drives both systems. */
+:root {
+  --radius: 0.375rem;
+  --background: #f9f9f7; /* page */
+  --foreground: #0b0b0b; /* ink */
+  --card: #fcfcfb; /* surface */
+  --card-foreground: #0b0b0b;
+  --popover: #fcfcfb;
+  --popover-foreground: #0b0b0b;
+  --primary: #0b0b0b;
+  --primary-foreground: #fcfcfb;
+  --secondary: #f0efec; /* raised */
+  --secondary-foreground: #0b0b0b;
+  --muted: #f0efec;
+  --muted-foreground: #52514e; /* ink2 */
+  --accent: #f0efec;
+  --accent-foreground: #0b0b0b;
+  --destructive: #c23434;
+  --border: #d9d8d0; /* edge */
+  --input: #d9d8d0;
+  --ring: #2a78d6; /* series blue */
+}
+
+.dark {
+  --background: #0d0d0d;
+  --foreground: #ffffff;
+  --card: #1a1a19;
+  --card-foreground: #ffffff;
+  --popover: #262624;
+  --popover-foreground: #ffffff;
+  --primary: #ffffff;
+  --primary-foreground: #0b0b0b;
+  --secondary: #262624;
+  --secondary-foreground: #ffffff;
+  --muted: #262624;
+  --muted-foreground: #c3c2b7;
+  --accent: #262624;
+  --accent-foreground: #ffffff;
+  --destructive: #e66767;
+  --border: #383835;
+  --input: #383835;
+  --ring: #3987e5;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-ink2: var(--ink2);
+  --color-ink3: var(--ink3);
+  --color-edge: var(--edge);
+  --color-edge-soft: var(--edge-soft);
+  --color-danger: var(--danger);
+  --color-series: var(--series);
+  /* shadcn slots */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+body {
+  @apply bg-page text-ink text-[13px] antialiased;
+}
+
+/* intentional global override: this dashboard renders static/screenshotted charts, so
+   no component should animate */
+* {
+  /* biome-ignore lint/complexity/noImportantStyles: see comment above */
+  animation: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: see comment above */
+  transition: none !important;
+}
