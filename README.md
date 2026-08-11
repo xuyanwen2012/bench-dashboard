@@ -117,6 +117,27 @@ bun run format     # biome format --write only
 bun run typecheck  # tsc --noEmit
 ```
 
+## Adding data
+
+`add_run.ts` appends one run per invocation and creates the schema on first use, so a
+harness (or a shell loop around adb) needs no SQL of its own. It parses the
+`PyTorchObserver {...}` line straight from `llama_main` output on stdin:
+
+```bash
+adb -s R5CY21Y3VEV shell "cd /data/local/tmp/llama_dev && ./llama_main ..." | \
+  bun run add_run.ts --device s24plus-xclipse940 --driver 24.1.307 \
+    --commit 676eca2 --branch yanwen/dev-1.3 --session s24-0811-a \
+    --model llama3_2_1b --quant 4w --ctx 3072 --storage buffer \
+    --temp-start-mc 31200 --temp-end-mc 42100
+```
+
+Add `--sweep --tile-m/--tile-n/--tile-k` for a tile-sweep row (prefill-only), or pass
+`--prefill-tps`/`--decode-tps` explicitly when there is no stdin. `config_hash` is
+derived from commit+device+driver+params (key-sorted), and `--repeat` auto-increments
+within the session's cell, so a cooldown rep loop just re-runs one command line. Keep
+`--session` honest — the heat-soak flag looks for declining reps *within* a session.
+`--dry-run` prints the row instead of writing; `--help` lists everything.
+
 ## Schema note
 
 The real `schema.sql` did not exist when this was built; the table/view DDL in
