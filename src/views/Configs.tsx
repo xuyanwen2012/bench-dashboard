@@ -45,7 +45,7 @@ export default function Configs() {
   const [sort, setSort] = useState<Sort>(null);
   // grouped mode answers "why several rows with the same settings": one block
   // per settings combo, its commits listed beneath in first-seen order
-  const [grouped, setGrouped] = useState(true);
+  const [grouped, setGrouped] = useState(false);
   const { data, error, loading } = useFetch<ConfigStat[]>(`/api/configs${filterQs(filters)}`);
 
   if (error) return <p className="text-danger">{error}</p>;
