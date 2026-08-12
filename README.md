@@ -138,6 +138,35 @@ within the session's cell, so a cooldown rep loop just re-runs one command line.
 `--session` honest — the heat-soak flag looks for declining reps *within* a session.
 `--dry-run` prints the row instead of writing; `--help` lists everything.
 
+### Field semantics — what the dashboard does with each column
+
+- **`model` is not a column** — it lives in the `params` JSON
+  (`{"model":"llama3_2_1b",...}`) and every view reads it via
+  `json_extract(params,'$.model')`. A row without it never matches a model filter.
+- **`ts`** (unix seconds) is more than a timestamp: "latest commit" in trend ordering
+  and compare's latest-commit-per-cell rule means *earliest `ts` per commit* defines
+  commit order. Use real wall-clock times or commit ordering silently scrambles.
+- **`prefill_tps` / `decode_tps`** come from the observer line. The derived e2e metric
+  is `3072 / (2048/prefill + 1024/decode)` — it assumes the standard 2048-prefill +
+  1024-decode run shape (constants in `src/theme.ts`), so runs with a different shape
+  make the e2e number a fiction even though prefill/decode stay valid.
+- **`samples`** (JSON array of per-iteration tok/s) feeds the run-detail strip plot and
+  the `samples ↓X%` within-run decay flag (first-half vs second-half mean, ≥6
+  iterations). Omitting it just disables both.
+- **`temp_start_mc`** (milli-°C) drives the `hot start +X°C` flag — relative to the
+  config's *coolest* recorded start, not an absolute threshold. `temp_end_mc` is
+  displayed but never flagged (within-run rise is physics, not a protocol violation).
+- **`session_id` + `repeat_idx`** are the unit of heat-soak detection: the `reps ↓X%`
+  config flag fires when rep means decline ≥5% first→last within one session with ≥80%
+  of steps decreasing. `freq_pinned=0` and `dirty=1` are shown (`dirty` gets a badge)
+  but neither blocks anything.
+- **`excluded=1`** hides a row from every view and aggregate unless the API is called
+  with `?include_excluded=1`. Exclude bad runs this way instead of deleting them.
+- **`config_hash`** groups the configs view and its run drill-down; `add_run.ts`
+  derives it so identical settings at the same commit always collapse into one config.
+- The writer sets **WAL mode**, and the dashboard opens the db read-only — appending
+  while the dashboard is open is safe; a browser refresh picks up new rows.
+
 ## Schema note
 
 The real `schema.sql` did not exist when this was built; the table/view DDL in
